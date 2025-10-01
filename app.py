@@ -65,17 +65,20 @@ HTML_PAGE = """
 </html>
 """
 
-@app.route("/")
+@app.route("/") #the actual url is 'https://agritriad-temp.onrender.com'
 def index():
     return render_template_string(HTML_PAGE)
 
 # API endpoint for ESP32 to poll for the latest language selection
-@app.route("/api/lang", methods=["GET"])
+@app.route("/api/lang", methods=["GET"]) #https://agritriad-temp.onrender.com/api/lang
 def api_lang():
+    # Check if the selected language is valid
+    global selected_lang
+    
     if selected_lang in ["ha", "en", "sw"]:
-        return jsonify({"lang": selected_lang})
+        return jsonify({"cmd": selected_lang})
     else:
-        return jsonify({"lang": None}), 200
+        return jsonify({"cmd": None}), 200
 
 # Endpoint for the website to set the language
 @app.route("/play")
