@@ -56,9 +56,6 @@ HTML_PAGE = """
         function play(lang) {
             fetch(`/play?lang=${lang}`)
                 .then(response => response.json())
-                .then(data => {
-                    alert(`Selected: ${data.lang}`);
-                });
         }
     </script>
 </body>
