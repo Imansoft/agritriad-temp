@@ -4,6 +4,7 @@ from flask_cors import CORS
 from pathlib import Path
 import logging
 import wave
+import time
 
 app = Flask(__name__)
 CORS(app)
@@ -11,6 +12,7 @@ CORS(app)
 # ---------------- CONFIG ----------------
 PROJECT_ROOT = Path(__file__).parent.resolve()
 AUDIO_DIR = (PROJECT_ROOT / "audio").resolve()  # e.g. C:\Users\hp\...\AgriTriad\audio
+# Map short codes to your exact filenames
 AUDIO_MAP = {
     "en": "English.wav",
     "ha": "Hausa.wav",
@@ -25,7 +27,7 @@ selected_lang = None
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("agritiad")
 
-# simple UI (optional)
+# simple UI (keeps your original buttons)
 HTML_PAGE = """
 <!doctype html>
 <html>
@@ -44,43 +46,13 @@ HTML_PAGE = """
             align-items: center;
             justify-content: center;
         }
-        h1 {
-            font-size: 2.5em;
-            margin-bottom: 40px;
-            letter-spacing: 2px;
-            text-shadow: 0 2px 8px #0008;
-        }
-        .btn {
-            display: block;
-            width: 240px;
-            padding: 22px 0;
-            margin: 18px auto;
-            font-size: 1.4em;
-            font-weight: 600;
-            border: none;
-            border-radius: 12px;
-            cursor: pointer;
-            color: #fff;
-            box-shadow: 0 2px 12px #0005;
-            transition: background 0.2s, transform 0.15s;
-        }
-        .btn-hausa { background: #e67e22; }
-        .btn-hausa:hover { background: #ca6f1e; transform: scale(1.04); }
-        .btn-english { background: #2980b9; }
-        .btn-english:hover { background: #21618c; transform: scale(1.04); }
-        .btn-swahili { background: #27ae60; }
-        .btn-swahili:hover { background: #1e8449; transform: scale(1.04); }
-        .desc {
-            margin-top: 40px;
-            font-size: 1.1em;
-            color: #bbb;
-        }
-        code {
-            background: #333;
-            color: #e67e22;
-            padding: 2px 6px;
-            border-radius: 5px;
-        }
+        h1 { font-size: 2.5em; margin-bottom: 40px; letter-spacing: 2px; text-shadow: 0 2px 8px #0008; }
+        .btn { display:block; width:240px; padding:22px 0; margin:18px auto; font-size:1.4em; font-weight:600; border:none; border-radius:12px; cursor:pointer; color:#fff; box-shadow:0 2px 12px #0005; transition:background 0.2s, transform 0.15s; }
+        .btn-hausa { background:#e67e22 } .btn-hausa:hover { background:#ca6f1e; transform:scale(1.04); }
+        .btn-english { background:#2980b9 } .btn-english:hover { background:#21618c; transform:scale(1.04); }
+        .btn-swahili { background:#27ae60 } .btn-swahili:hover { background:#1e8449; transform:scale(1.04); }
+        .desc { margin-top:40px; font-size:1.1em; color:#bbb; }
+        code { background:#333; color:#e67e22; padding:2px 6px; border-radius:5px; }
     </style>
 </head>
 <body>
@@ -88,13 +60,14 @@ HTML_PAGE = """
     <button class="btn btn-hausa" onclick="fetch('/play?lang=ha').then(r=>r.json()).then(console.log)">Hausa</button>
     <button class="btn btn-english" onclick="fetch('/play?lang=en').then(r=>r.json()).then(console.log)">English</button>
     <button class="btn btn-swahili" onclick="fetch('/play?lang=sw').then(r=>r.json()).then(console.log)">Swahili</button>
-    <div class="desc">ESP32 polls <code>/api/lang</code> for new commands.</div>
+    <div class="desc">ESP32 polls <code>/api/lang</code>. To consume (auto-clear) call <code>/api/lang?consume=1</code>.</div>
 </body>
 </html>
 """
 
 # ---------------- helpers ----------------
 def audio_file_for_lang(lang: str) -> Path:
+    """Return resolved Path to the audio file for lang (throws KeyError if bad lang)."""
     if lang not in AUDIO_MAP:
         raise KeyError(lang)
     return (AUDIO_DIR / AUDIO_MAP[lang]).resolve()
@@ -107,6 +80,11 @@ def inspect_wav(path: Path):
         comp = wf.getcomptype()
         return (comp == 'NONE'), sampwidth * 8, sr
 
+def build_audio_url(lang: str) -> str:
+    """Return absolute audio url for this request context (keeps incoming scheme/host)."""
+    # request.url_root contains scheme://host:port/ as seen by the server from the request
+    return request.url_root.rstrip("/") + f"/audio/{lang}"
+
 # ---------------- routes ----------------
 @app.route("/")
 def index():
@@ -116,13 +94,19 @@ def index():
 def api_lang():
     """
     ESP32 polls this endpoint.
-    Response: {"cmd": "en" | "ha" | "sw" | None, "audio_url": "http://host:5000/audio/en" | None}
+    If 'consume=1' query param is provided, the server returns the current command
+    and then clears it (so subsequent polls won't replay unless UI sets again).
+    Response JSON: {"cmd": "en" | "ha" | "sw" | None, "audio_url": "https://.../audio/en" | None}
     """
     global selected_lang
+    consume = request.args.get("consume", default="0")
     if selected_lang in VALID_LANGS:
-        # build absolute URL for audio (so ESP32 can GET it)
-        audio_url = request.url_root.rstrip("/") + f"/audio/{selected_lang}"
-        return jsonify({"cmd": selected_lang, "audio_url": audio_url}), 200
+        audio_url = build_audio_url(selected_lang)
+        resp = {"cmd": selected_lang, "audio_url": audio_url}
+        if consume in ("1", "true", "yes"):
+            logger.info("API consume requested — returning cmd and clearing selected_lang: %s", selected_lang)
+            selected_lang = None
+        return jsonify(resp), 200
     return jsonify({"cmd": None, "audio_url": None}), 200
 
 @app.route("/play")
@@ -151,6 +135,25 @@ def play():
     logger.info("Selected language: %s (file: %s)", lang, AUDIO_MAP[lang])
     return jsonify({"lang": lang}), 200
 
+# convenience endpoints for manual testing / scripts
+@app.route("/set/<lang>")
+def set_cmd(lang):
+    """Set language via /set/en (useful for scripts or testing)."""
+    global selected_lang
+    if lang not in VALID_LANGS:
+        return jsonify({"error": "Invalid language"}), 400
+    selected_lang = lang
+    logger.info("Language set via /set: %s", lang)
+    return jsonify({"lang": lang}), 200
+
+@app.route("/clear")
+def clear_cmd():
+    """Clear the current selected language."""
+    global selected_lang
+    selected_lang = None
+    logger.info("Selected language cleared via /clear")
+    return jsonify({"status": "cleared"}), 200
+
 @app.route("/audio/<lang>")
 def audio(lang):
     """Serve WAV file bytes. 404 if missing."""
@@ -160,12 +163,12 @@ def audio(lang):
     if not fpath.exists():
         logger.error("Requested audio not found: %s", fpath)
         abort(404)
-    # stream file
+    # stream file; send_file will set Content-Type audio/wav and Content-Length
     return send_file(str(fpath), mimetype="audio/wav", as_attachment=False)
 
 @app.route("/health")
 def health():
-    return jsonify({"status": "ok"}), 200
+    return jsonify({"status": "ok", "time": int(time.time())}), 200
 
 # -------------- startup --------------
 if __name__ == "__main__":
