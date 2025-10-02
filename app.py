@@ -1,9 +1,12 @@
-from flask import Flask, request, jsonify, render_template_string
+from flask import Flask, request
+from flask import  jsonify, render_template_string
+import requests
 import logging
 
 app = Flask(__name__)
 
-selected_lang = None  # Store the last selected language
+# ESP32 endpoint IP address (replace with your actual ESP32 IP)
+ESP32_URL = "http://10.28.30.200/play"
 
 # Configure logging
 logging.basicConfig(level=logging.INFO)
@@ -62,30 +65,22 @@ HTML_PAGE = """
 </html>
 """
 
-@app.route("/") #the actual url is 'https://agritriad-temp.onrender.com'
+@app.route("/")
 def index():
     return render_template_string(HTML_PAGE)
 
-# API endpoint for ESP32 to poll for the latest language selection
-@app.route("/api/lang", methods=["GET"]) #https://agritriad-temp.onrender.com/api/lang
-def api_lang():
-    # Check if the selected language is valid
-    global selected_lang
-    
-    if selected_lang in ["ha", "en", "sw"]:
-        return jsonify({"cmd": selected_lang})
-    else:
-        return jsonify({"cmd": None}), 200
-
-# Endpoint for the website to set the language
 @app.route("/play")
 def play():
-    global selected_lang
     lang = request.args.get("lang")
     if lang not in ["ha", "en", "sw"]:
         return jsonify({"error": "Invalid language"}), 400
-    selected_lang = lang
     logging.info(f"Button pressed: {lang}")
+    # Send JSON payload to ESP32 endpoint
+    try:
+        resp = requests.post(ESP32_URL, json={"lang": lang}, timeout=2)
+        logging.info(f"ESP32 response: {resp.status_code}")
+    except Exception as e:
+        logging.error(f"Error sending to ESP32: {e}")
     return jsonify({"lang": lang})
 
 if __name__ == "__main__":
