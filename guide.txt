@@ -1,0 +1,62 @@
+Generate a complete Flask backend with the following specifications. 
+Do this in the file named `app.py`.
+
+========================================
+PROJECT GOAL
+========================================
+Create three API endpoints for hardware testing:
+
+1. /api/audio      → The hardware POSTs an audio file here.
+2. /api/audio2     → The hardware GETs an audio response here.
+3. /api/database   → The hardware POSTs sensor readings here as JSON.
+
+These endpoints are temporary and meant for testing audio transmission and sensor updates.
+
+========================================
+DETAILED REQUIREMENTS
+========================================
+
+### 1. /api/audio  (POST)
+- Accept multipart/form-data.
+- Field name for the audio file: "audio".
+- Save uploaded audio files to a folder named "audio/received".
+- Return JSON: { "status": "received", "filename": "<saved name>" }
+
+### 2. /api/audio2  (GET)
+- This endpoint returns a test audio file back to the hardware.
+- Always return a file named "English.wav" stored in "audio/sent".
+- Return this file as an audio/wav response.
+
+### 3. /api/database (POST)
+- Receive JSON with sensor readings.
+- Example:
+  {
+    "device_id": "AGRO-001",
+    "timestamp": "2025-12-01T18:25:43",
+    "light_value": 320,
+    "moisture_value": 690
+  }
+- Append this JSON to a simple text file named `sensor_logs.txt` (newline separated).
+- Return JSON: { "status": "saved" }
+
+========================================
+SERVER REQUIREMENTS
+========================================
+- Use Flask.
+- Use `flask_cors` to allow CORS.
+- Create folders automatically if they don't exist:
+  uploads/
+     input_audio/
+     output_audio/
+- Add basic error handling for missing files or invalid JSON.
+- Add a `/` health check route returning: { "status": "ok" }
+
+========================================
+EXTRA NOTES
+========================================
+- No authentication required.
+- Keep the code simple and clean.
+- Include comments explaining each route.
+- Include `if __name__ == "__main__":` block to run server on port 5000.
+
+Generate the full working code.
