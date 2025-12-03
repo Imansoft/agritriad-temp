@@ -11,7 +11,7 @@ CORS(app)
 
 # Folder paths
 INPUT_AUDIO_DIR = os.path.join('audio', 'received')
-OUTPUT_AUDIO_DIR = os.path.join('audio', 'sent')
+OUTPUT_AUDIO_DIR = os.path.join('audio', 'send')
 SENSOR_LOG_FILE = 'sensor_logs.txt'
 
 # Ensure required folders exist
@@ -39,6 +39,7 @@ def receive_audio():
 	except Exception as e:
 		return jsonify({"error": f"Failed to save file: {str(e)}"}), 500
 	return jsonify({"status": "received", "filename": filename})
+
 
 # 2. /api/audio2 (GET): Return a fixed audio file to hardware
 @app.route("/api/audio2", methods=["GET"])
