@@ -45,9 +45,9 @@ SERVER REQUIREMENTS
 - Use Flask.
 - Use `flask_cors` to allow CORS.
 - Create folders automatically if they don't exist:
-  uploads/
-     input_audio/
-     output_audio/
+  audio/
+     received/
+     sent/
 - Add basic error handling for missing files or invalid JSON.
 - Add a `/` health check route returning: { "status": "ok" }
 
