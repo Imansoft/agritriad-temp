@@ -1,4 +1,3 @@
-
 # Updated directory paths as per guide.txt
 import os
 from flask import Flask, request, jsonify, send_from_directory
@@ -67,6 +66,48 @@ def receive_sensor_data():
 	except Exception as e:
 		return jsonify({"error": f"Failed to log sensor data: {str(e)}"}), 500
 	return jsonify({"status": "saved"})
+
+# 4. /api/database2 (GET): Fetch recent sensor data entries
+@app.route("/api/database2", methods=["GET"])
+def fetch_sensor_data():
+	# Get 'count' parameter from query string, default to 1
+	try:
+		count = int(request.args.get("count", 1))
+		if count < 1:
+			return jsonify({"error": "Count must be a positive integer"}), 400
+	except ValueError:
+		return jsonify({"error": "Invalid count parameter"}), 400
+
+	# Read sensor_logs.txt
+	if not os.path.exists(SENSOR_LOG_FILE):
+		return jsonify({"error": "No sensor data available"}), 404
+
+	try:
+		with open(SENSOR_LOG_FILE, "r", encoding="utf-8") as f:
+			lines = f.readlines()
+	except Exception as e:
+		return jsonify({"error": f"Failed to read sensor log: {str(e)}"}), 500
+
+	total_entries = len(lines)
+	if total_entries == 0:
+		return jsonify({"error": "No sensor data available"}), 404
+
+	# Get the most recent 'count' entries
+	if count > total_entries:
+		selected = [json.loads(line) for line in lines[-total_entries:]]
+		message = f"max data in DB is {total_entries}"
+	else:
+		selected = [json.loads(line) for line in lines[-count:]]
+		message = None
+
+	response = {
+		"entries_returned": len(selected),
+		"data": selected
+	}
+	if message:
+		response["message"] = message
+
+	return jsonify(response)
 
 # Run the Flask server
 if __name__ == "__main__":
