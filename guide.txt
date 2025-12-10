@@ -62,36 +62,18 @@ EXTRA NOTES
 Generate the full working code.
 
 
-{'data': [
-  {
-    'device_id': 'AGRO-001', 
-    'light_value': 310, 
-    'moisture_value': 590, 
-    'timestamp': '2025-12-02T18:25:43'
+{
+  'data': [
+    {
+      'device_id': 'AGRO-001', 
+      'light_value': 310, 
+      'moisture_value': 590, 
+      'timestamp': '2025-12-02T18:25:43'
     }
   ], 
   'entries_returned': 1
-  }
+}
 
-
-
-  {
-    'data': [
-      {
-        'device_id': 'AGRO-001', 
-        'light_value': 320, 
-        'moisture_value': 690, 
-        'timestamp': '2025-12-01T18:25:43'
-      }, 
-      {
-        'device_id': 'AGRO-001', 
-        'light_value': 310, 
-        'moisture_value': 590, 
-        'timestamp': '2025-12-02T18:25:43'
-      }
-    ], 
-    'entries_returned': 2
-    }
 
 
 {
@@ -107,8 +89,27 @@ Generate the full working code.
       'light_value': 310, 
       'moisture_value': 590, 
       'timestamp': '2025-12-02T18:25:43'
-      }
-    ], 
-    'entries_returned': 2, 
-    'message': 'max data in DB is 2'
-  }
+    }
+  ], 
+  'entries_returned': 2
+}
+
+
+{
+  'data': [
+    {
+      'device_id': 'AGRO-001', 
+      'light_value': 320, 
+      'moisture_value': 690, 
+      'timestamp': '2025-12-01T18:25:43'
+    }, 
+    {
+      'device_id': 'AGRO-001', 
+      'light_value': 310, 
+      'moisture_value': 590, 
+      'timestamp': '2025-12-02T18:25:43'
+    }
+  ], 
+  'entries_returned': 2, 
+  'message': 'max data in DB is 2'
+}
