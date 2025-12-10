@@ -24,6 +24,17 @@ os.makedirs(OUTPUT_AUDIO_DIR, exist_ok=True)
 def health_check():
 	return jsonify({"status": "ok"})
 
+# WebSocket event: client connection
+@socketio.on("connect")
+def on_connect():
+	print("A client connected")
+	emit("server_message", {"msg": "Connected to server"})
+
+# WebSocket event: client disconnection
+@socketio.on("disconnect")
+def on_disconnect():
+	print("A client disconnected")
+
 # WebSocket event: receive audio file
 @socketio.on("upload_audio")
 def handle_upload_audio(data):
