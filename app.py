@@ -2,11 +2,13 @@
 import os
 from flask import Flask, request, jsonify, send_from_directory
 from flask_cors import CORS
+from flask_socketio import SocketIO, emit
 from werkzeug.utils import secure_filename
 import json
 
 app = Flask(__name__)
 CORS(app)
+socketio = SocketIO(app, cors_allowed_origins="*")
 
 # Folder paths
 INPUT_AUDIO_DIR = os.path.join('audio', 'received')
@@ -22,93 +24,94 @@ os.makedirs(OUTPUT_AUDIO_DIR, exist_ok=True)
 def health_check():
 	return jsonify({"status": "ok"})
 
-# 1. /api/audio (POST): Receive audio file from hardware
-@app.route("/api/audio", methods=["POST"])
-def receive_audio():
-	# Check if the request has the file part
-	if 'audio' not in request.files:
-		return jsonify({"error": "No audio file part in the request"}), 400
-	file = request.files['audio']
-	if file.filename == '':
-		return jsonify({"error": "No selected file"}), 400
-	filename = secure_filename(file.filename)
-	save_path = os.path.join(INPUT_AUDIO_DIR, filename)
+# WebSocket event: receive audio file
+@socketio.on("upload_audio")
+def handle_upload_audio(data):
 	try:
-		file.save(save_path)
+		if "audio" not in data or "filename" not in data:
+			emit("audio_error", {"error": "Missing audio or filename"})
+			return
+		audio_data = data["audio"]
+		filename = secure_filename(data["filename"])
+		save_path = os.path.join(INPUT_AUDIO_DIR, filename)
+		# Assuming audio_data is base64 encoded
+		with open(save_path, "wb") as f:
+			import base64
+			f.write(base64.b64decode(audio_data))
+		emit("audio_response", {"status": "received", "filename": filename})
 	except Exception as e:
-		return jsonify({"error": f"Failed to save file: {str(e)}"}), 500
-	return jsonify({"status": "received", "filename": filename})
+		emit("audio_error", {"error": f"Failed to save file: {str(e)}"})
 
-
-# 2. /api/audio2 (GET): Return a fixed audio file to hardware
-@app.route("/api/audio2", methods=["GET"])
-def send_audio():
-	# Always return 'English.wav' from audio/sent
-	filename = "English.wav"
-	file_path = os.path.join(OUTPUT_AUDIO_DIR, filename)
-	if not os.path.exists(file_path):
-		return jsonify({"error": f"File {filename} not found in {OUTPUT_AUDIO_DIR}"}), 404
-	return send_from_directory(OUTPUT_AUDIO_DIR, filename, mimetype="audio/wav")
-
-# 3. /api/database (POST): Receive sensor readings as JSON
-@app.route("/api/database", methods=["POST"])
-def receive_sensor_data():
-	if not request.is_json:
-		return jsonify({"error": "Request must be JSON"}), 400
-	data = request.get_json()
-	# Basic validation for required fields
-	required_fields = ["device_id", "timestamp", "light_value", "moisture_value"]
-	if not all(field in data for field in required_fields):
-		return jsonify({"error": "Missing required sensor fields"}), 400
+# WebSocket event: request audio file
+@socketio.on("request_audio")
+def handle_request_audio():
 	try:
+		filename = "English.wav"
+		file_path = os.path.join(OUTPUT_AUDIO_DIR, filename)
+		if not os.path.exists(file_path):
+			emit("audio_error", {"error": f"File {filename} not found in {OUTPUT_AUDIO_DIR}"})
+			return
+		with open(file_path, "rb") as f:
+			import base64
+			audio_data = base64.b64encode(f.read()).decode("utf-8")
+		emit("audio_response", {"audio": audio_data, "filename": filename})
+	except Exception as e:
+		emit("audio_error", {"error": f"Failed to read file: {str(e)}"})
+
+# WebSocket event: receive sensor data
+@socketio.on("log_sensor_data")
+def handle_log_sensor_data(data):
+	try:
+		required_fields = ["device_id", "timestamp", "light_value", "moisture_value"]
+		if not all(field in data for field in required_fields):
+			emit("database_error", {"error": "Missing required sensor fields"})
+			return
 		with open(SENSOR_LOG_FILE, "a", encoding="utf-8") as f:
 			f.write(json.dumps(data) + "\n")
+		emit("database_response", {"status": "saved"})
 	except Exception as e:
-		return jsonify({"error": f"Failed to log sensor data: {str(e)}"}), 500
-	return jsonify({"status": "saved"})
+		emit("database_error", {"error": f"Failed to log sensor data: {str(e)}"})
 
-# 4. /api/database2 (GET): Fetch recent sensor data entries
-@app.route("/api/database2", methods=["GET"])
-def fetch_sensor_data():
-	# Get 'count' parameter from query string, default to 1
+# WebSocket event: fetch sensor data
+@socketio.on("fetch_sensor_data")
+def handle_fetch_sensor_data(data):
 	try:
-		count = int(request.args.get("count", 1))
-		if count < 1:
-			return jsonify({"error": "Count must be a positive integer"}), 400
-	except ValueError:
-		return jsonify({"error": "Invalid count parameter"}), 400
-
-	# Read sensor_logs.txt
-	if not os.path.exists(SENSOR_LOG_FILE):
-		return jsonify({"error": "No sensor data available"}), 404
-
-	try:
+		count = data.get("count", 1)
+		if not isinstance(count, int) or count < 1:
+			emit("database_error", {"error": "Count must be a positive integer"})
+			return
+		
+		if not os.path.exists(SENSOR_LOG_FILE):
+			emit("database_error", {"error": "No sensor data available"})
+			return
+		
 		with open(SENSOR_LOG_FILE, "r", encoding="utf-8") as f:
 			lines = f.readlines()
+		
+		total_entries = len(lines)
+		if total_entries == 0:
+			emit("database_error", {"error": "No sensor data available"})
+			return
+		
+		if count > total_entries:
+			selected = [json.loads(line) for line in lines[-total_entries:]]
+			message = f"max data in DB is {total_entries}"
+		else:
+			selected = [json.loads(line) for line in lines[-count:]]
+			message = None
+		
+		response = {
+			"entries_returned": len(selected),
+			"data": selected
+		}
+		if message:
+			response["message"] = message
+		
+		emit("database_response", response)
 	except Exception as e:
-		return jsonify({"error": f"Failed to read sensor log: {str(e)}"}), 500
+		emit("database_error", {"error": f"Failed to read sensor log: {str(e)}"})
 
-	total_entries = len(lines)
-	if total_entries == 0:
-		return jsonify({"error": "No sensor data available"}), 404
 
-	# Get the most recent 'count' entries
-	if count > total_entries:
-		selected = [json.loads(line) for line in lines[-total_entries:]]
-		message = f"max data in DB is {total_entries}"
-	else:
-		selected = [json.loads(line) for line in lines[-count:]]
-		message = None
-
-	response = {
-		"entries_returned": len(selected),
-		"data": selected
-	}
-	if message:
-		response["message"] = message
-
-	return jsonify(response)
-
-# Run the Flask server
+# Run the Flask-SocketIO server
 if __name__ == "__main__":
-	app.run(host="0.0.0.0", port=5000)
+	socketio.run(app, host="0.0.0.0", port=5000, debug=True)
