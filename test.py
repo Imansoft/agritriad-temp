@@ -1,53 +1,116 @@
-import requests
-import json
+import socketio
+import base64
+import os
+import time
 
-BASE_URL = "http://127.0.0.1:5000"
+# Create a Socket.IO client
+sio = socketio.Client()
 
-# 1. Test /api/audio (POST)
-def test_post_audio():
-    url = f"{BASE_URL}/api/audio"
-    audio_path = "audio\send\English.wav"  # Change to a valid audio file path
-    files = {"audio": open(audio_path, "rb")}
-    response = requests.post(url, files=files)
-    print("/api/audio POST response:", response.json())
+# Server URL
+SERVER_URL = "https://agritriad-temp.onrender.com" #"http://127.0.0.1:5000"
 
-# 2. Test /api/audio2 (GET)
-def test_get_audio2():
-    url = f"{BASE_URL}/api/audio2"
-    response = requests.get(url)
-    if response.status_code == 200:
-        with open("received_English.wav", "wb") as f:
-            f.write(response.content)
-        print("/api/audio2 GET response: Audio file saved as received_English.wav")
+# Event handlers
+@sio.event
+def connect():
+    print("Connected to server")
+
+@sio.event
+def server_message(data):
+    print(f"Server message: {data}")
+
+@sio.event
+def audio_response(data):
+    if "audio" in data:
+        # Received audio file
+        audio_data = base64.b64decode(data["audio"])
+        filename = data.get("filename", "received_audio.wav")
+        with open(filename, "wb") as f:
+            f.write(audio_data)
+        print(f"Audio response received and saved as {filename}")
     else:
-        print("/api/audio2 GET error:", response.json())
+        print(f"Audio response: {data}")
 
-# 3. Test /api/database (POST)
-def test_post_database():
-    url = f"{BASE_URL}/api/database"
+@sio.event
+def audio_error(data):
+    print(f"Audio error: {data}")
+
+@sio.event
+def database_response(data):
+    print(f"Database response: {data}")
+
+@sio.event
+def database_error(data):
+    print(f"Database error: {data}")
+
+@sio.event
+def disconnect():
+    print("Disconnected from server")
+
+# Test functions
+def test_upload_audio(audio_path):
+    """Upload audio file to server"""
+    if not os.path.exists(audio_path):
+        print(f"Audio file {audio_path} not found")
+        return
+    
+    with open(audio_path, "rb") as f:
+        audio_data = base64.b64encode(f.read()).decode("utf-8")
+    
+    filename = os.path.basename(audio_path)
+    sio.emit("upload_audio", {"audio": audio_data, "filename": filename})
+    print(f"Uploaded audio: {filename}")
+    time.sleep(1)  # Wait for response
+
+def test_request_audio():
+    """Request audio file from server"""
+    sio.emit("request_audio")
+    print("Requested audio from server")
+    time.sleep(1)  # Wait for response
+
+def test_log_sensor_data(device_id, light_value, moisture_value):
+    """Send sensor data to server"""
+    from datetime import datetime
     data = {
-        "device_id": "AGRO-001",
-        "timestamp": "2025-12-02T18:25:43",
-        "light_value": 310,
-        "moisture_value": 590
+        "device_id": device_id,
+        "timestamp": datetime.now().isoformat(),
+        "light_value": light_value,
+        "moisture_value": moisture_value
     }
-    response = requests.post(url, json=data)
-    print("/api/database POST response:", response.json())
+    sio.emit("log_sensor_data", data)
+    print(f"Logged sensor data: {data}")
+    time.sleep(1)  # Wait for response
 
-# 4. Test /api/database2 (GET)
-def test_get_database2(count=1):
-    url = f"{BASE_URL}/api/database2?count={count}"
-    response = requests.get(url)
-    try:
-        print(f"/api/database2 GET response (count={count}):", response.json())
-    except Exception:
-        print(f"/api/database2 GET error (count={count}):", response.text)
+def test_fetch_sensor_data(count=1):
+    """Fetch sensor data from server"""
+    sio.emit("fetch_sensor_data", {"count": count})
+    print(f"Requested {count} sensor entries")
+    time.sleep(1)  # Wait for response
 
 if __name__ == "__main__":
-    # Uncomment the function you want to test
-    # test_post_audio()
-    # test_get_audio2()
-    #test_post_database()
-    # test_get_database2(1)  # Fetch most recent entry
-    # test_get_database2(2)  # Fetch last 2 entries
-    test_get_database2(14) # Fetch last 14 entries
+    try:
+        # Connect to server
+        sio.connect(SERVER_URL)
+        time.sleep(1)
+        
+        # Uncomment the test you want to run
+        
+        # Test 1: Upload audio
+        # test_upload_audio("audio/send/English.wav")
+        
+        # Test 2: Request audio
+        test_request_audio()
+        
+        # Test 3: Log sensor data
+        # test_log_sensor_data("AGRO-001", 320, 690)
+        
+        # Test 4: Fetch sensor data
+        # test_fetch_sensor_data(1)
+        # test_fetch_sensor_data(2)
+        # test_fetch_sensor_data(14)
+        
+        # Keep connection alive
+        time.sleep(3)
+        sio.disconnect()
+        
+    except Exception as e:
+        print(f"Error: {e}")
