@@ -1,2 +1,3 @@
 {"device_id": "AGRO-001", "timestamp": "2025-12-01T18:25:43", "light_value": 320, "moisture_value": 690}
 {"device_id": "AGRO-001", "timestamp": "2025-12-02T18:25:43", "light_value": 310, "moisture_value": 590}
+{"device_id": "AGRO-001", "timestamp": "2025-12-12T13:11:26", "light_value": 320, "moisture_value": 690}

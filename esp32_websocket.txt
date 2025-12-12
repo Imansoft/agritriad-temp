@@ -1,0 +1,351 @@
+#include <Arduino.h>
+#include <WiFi.h>
+#include <SocketIOclient.h>
+#include <ArduinoJson.h>
+#include <SPI.h>
+#include <SD.h>
+#include <FS.h>
+#include <driver/i2s.h>
+#include <base64.h>
+
+// ============== CONFIG ==============
+#define WIFI_SSID "READ"
+#define WIFI_PASS "VinceREAD"
+
+const char* SOCKETIO_SERVER = "agritriad-temp.onrender.com";
+const uint16_t SOCKETIO_PORT = 443;
+const char* DEVICE_ID = "AGROLATI-ESP32-001";
+
+SocketIOclient socketIO;
+
+// ============== PINS ==============
+#define I2S_MIC_WS   25
+#define I2S_MIC_SD   32
+#define I2S_MIC_SCK  26
+#define I2S_SPK_BCLK 14
+#define I2S_SPK_LRCK 15
+#define I2S_SPK_DIN  22
+#define SD_CS 5
+#define LDR_PIN 34
+#define SOIL_PIN 35
+
+// ============== AUDIO PARAMETERS ==============
+#define SAMPLE_RATE 16000
+#define MIC_BLOCK_SAMPLES 256
+#define RECORD_SECONDS 3
+#define MIC_I2S_BITS I2S_BITS_PER_SAMPLE_32BIT
+#define SPEAKER_I2S_BITS I2S_BITS_PER_SAMPLE_16BIT
+
+// ============== GLOBALS ==============
+static int32_t micInBuf[MIC_BLOCK_SAMPLES];
+static int16_t mic16Buf[MIC_BLOCK_SAMPLES];
+SemaphoreHandle_t sdMutex;
+TaskHandle_t recorderTaskHandle = NULL;
+bool wifiConnected = false;
+bool socketConnected = false;
+
+// ============== LOG ==============
+void LOG(const char* tag, const String &m) { Serial.printf("[%s] %s\n", tag, m.c_str()); }
+void LOG(const char* tag, const char* m) { Serial.printf("[%s] %s\n", tag, m); }
+
+// ============== WIFI ==============
+void connectWiFi() {
+  if (WiFi.status() == WL_CONNECTED) { wifiConnected = true; return; }
+  WiFi.mode(WIFI_STA);
+  WiFi.begin(WIFI_SSID, WIFI_PASS);
+  LOG("WIFI","Connecting...");
+  unsigned long start = millis();
+  while (WiFi.status() != WL_CONNECTED && millis() - start < 20000) {
+    delay(250);
+    Serial.print(".");
+  }
+  Serial.println();
+  wifiConnected = (WiFi.status() == WL_CONNECTED);
+  if (wifiConnected) { LOG("WIFI","Connected"); Serial.print("IP: "); Serial.println(WiFi.localIP()); }
+  else LOG("WIFI","Not connected");
+}
+
+// ============== I2S INIT ==============
+void initI2SMic() {
+  i2s_config_t cfg = {};
+  cfg.mode = (i2s_mode_t)(I2S_MODE_MASTER | I2S_MODE_RX);
+  cfg.sample_rate = SAMPLE_RATE;
+  cfg.bits_per_sample = MIC_I2S_BITS;
+  cfg.channel_format = I2S_CHANNEL_FMT_ONLY_LEFT;
+  cfg.communication_format = I2S_COMM_FORMAT_I2S_MSB;
+  cfg.dma_buf_count = 6;
+  cfg.dma_buf_len = MIC_BLOCK_SAMPLES;
+  cfg.use_apll = false;
+  cfg.intr_alloc_flags = ESP_INTR_FLAG_LEVEL1;
+
+  i2s_pin_config_t pins = {};
+  pins.bck_io_num = I2S_MIC_SCK;
+  pins.ws_io_num  = I2S_MIC_WS;
+  pins.data_in_num = I2S_MIC_SD;
+  pins.data_out_num = I2S_PIN_NO_CHANGE;
+
+  i2s_driver_install(I2S_NUM_0, &cfg, 0, NULL);
+  i2s_set_pin(I2S_NUM_0, &pins);
+  i2s_zero_dma_buffer(I2S_NUM_0);
+  LOG("I2S","Mic initialized");
+}
+
+void initI2SSpeaker() {
+  i2s_config_t cfg = {};
+  cfg.mode = (i2s_mode_t)(I2S_MODE_MASTER | I2S_MODE_TX);
+  cfg.sample_rate = SAMPLE_RATE;
+  cfg.bits_per_sample = SPEAKER_I2S_BITS;
+  cfg.channel_format = I2S_CHANNEL_FMT_ONLY_LEFT;
+  cfg.communication_format = I2S_COMM_FORMAT_I2S;
+  cfg.dma_buf_count = 6;
+  cfg.dma_buf_len = 512;
+  cfg.use_apll = false;
+  cfg.intr_alloc_flags = ESP_INTR_FLAG_LEVEL1;
+
+  i2s_pin_config_t pins = {};
+  pins.bck_io_num = I2S_SPK_BCLK;
+  pins.ws_io_num  = I2S_SPK_LRCK;
+  pins.data_out_num = I2S_SPK_DIN;
+  pins.data_in_num = I2S_PIN_NO_CHANGE;
+
+  i2s_driver_install(I2S_NUM_1, &cfg, 0, NULL);
+  i2s_set_pin(I2S_NUM_1, &pins);
+  i2s_zero_dma_buffer(I2S_NUM_1);
+  LOG("I2S","Speaker initialized");
+}
+
+// ============== WAV HEADER ==============
+void writeWavHeader(File &f, uint32_t dataBytes) {
+  uint32_t sampleRate = SAMPLE_RATE;
+  uint16_t bits = 16;
+  uint16_t channels = 1;
+  uint32_t byteRate = sampleRate * channels * (bits / 8);
+  uint16_t blockAlign = channels * (bits / 8);
+  uint32_t chunkSize = 36 + dataBytes;
+
+  f.seek(0);
+  f.write((const uint8_t*)"RIFF", 4);
+  f.write((uint8_t*)&chunkSize, 4);
+  f.write((const uint8_t*)"WAVE", 4);
+  f.write((const uint8_t*)"fmt ", 4);
+  uint32_t sub1 = 16; f.write((uint8_t*)&sub1, 4);
+  uint16_t pcm = 1; f.write((uint8_t*)&pcm, 2);
+  f.write((uint8_t*)&channels, 2);
+  f.write((uint8_t*)&sampleRate, 4);
+  f.write((uint8_t*)&byteRate, 4);
+  f.write((uint8_t*)&blockAlign, 2);
+  f.write((uint8_t*)&bits, 2);
+  f.write((const uint8_t*)"data", 4);
+  f.write((uint8_t*)&dataBytes, 4);
+}
+
+// ============== PLAYBACK ==============
+bool playWavFromSD(const String &path) {
+  if (!SD.exists(path)) { LOG("PLAY","File not found"); return false; }
+  File f = SD.open(path, FILE_READ);
+  if (!f) { LOG("PLAY","SD open failed"); return false; }
+  if (f.size() <= 44) { f.close(); LOG("PLAY","WAV too small"); return false; }
+  f.seek(44);
+  const size_t bufSz = 512;
+  uint8_t buf[bufSz];
+  while (f.available()) {
+    int r = f.read(buf, bufSz);
+    if (r <= 0) break;
+    size_t written = 0;
+    i2s_write(I2S_NUM_1, buf, r, &written, portMAX_DELAY);
+  }
+  f.close();
+  return true;
+}
+
+// ============== WEBSOCKET FUNCTIONS ==============
+void uploadAudioViaSocket(const String &path) {
+  if (!socketConnected || !SD.exists(path)) return;
+
+  File f = SD.open(path, FILE_READ);
+  if (!f) return;
+
+  size_t fileSize = f.size();
+  uint8_t* buffer = (uint8_t*)malloc(fileSize);
+  if (!buffer) { f.close(); LOG("UPLOAD", "Memory alloc failed"); return; }
+  
+  f.read(buffer, fileSize);
+  f.close();
+
+  // Simple base64 encode
+  String encoded = base64_encode(buffer, fileSize);
+  free(buffer);
+
+  // Create JSON payload
+  DynamicJsonDocument doc(fileSize + 512);
+  doc["audio"] = encoded;
+  doc["filename"] = "esp32_audio.wav";
+
+  String payload;
+  serializeJson(doc, payload);
+
+  // Send as Socket.IO event
+  socketIO.emit("upload_audio", payload.c_str());
+  LOG("UPLOAD", "Audio sent via WebSocket");
+}
+
+void requestAudioViaSocket() {
+  if (!socketConnected) return;
+  socketIO.emit("request_audio");
+  LOG("AUDIO", "Requested audio file via WebSocket");
+}
+
+void logSensorDataViaSocket(int light, int moisture) {
+  if (!socketConnected) return;
+
+  DynamicJsonDocument doc(256);
+  doc["device_id"] = DEVICE_ID;
+  doc["timestamp"] = String(millis());
+  doc["light_value"] = light;
+  doc["moisture_value"] = moisture;
+
+  String payload;
+  serializeJson(doc, payload);
+
+  socketIO.emit("log_sensor_data", payload.c_str());
+  LOG("SENSOR", "Data logged via WebSocket");
+}
+
+// ============== SOCKET.IO EVENT HANDLER ==============
+void socketIOEvent(socketIOmessageType_t type, uint8_t * payload, size_t length) {
+  switch(type) {
+    case sIOtype_CONNECT:
+      LOG("SOCKET.IO","Connected");
+      socketConnected = true;
+      break;
+      
+    case sIOtype_DISCONNECT:
+      LOG("SOCKET.IO","Disconnected");
+      socketConnected = false;
+      break;
+      
+    case sIOtype_EVENT: {
+      DynamicJsonDocument doc(1024);
+      DeserializationError error = deserializeJson(doc, payload, length);
+      if (error) return;
+
+      if (doc.containsKey("event")) {
+        String event = doc["event"];
+
+        if (event == "audio_response") {
+          LOG("AUDIO", "Received audio from server");
+          // In production: decode base64 and save/play audio
+        }
+        else if (event == "database_response") {
+          LOG("DATABASE", "Data saved successfully");
+        }
+      }
+      break;
+    }
+    
+    case sIOtype_ACK:
+      LOG("SOCKET.IO","Received ACK");
+      break;
+      
+    case sIOtype_ERROR:
+      LOG("SOCKET.IO","Received ERROR");
+      break;
+      
+    case sIOtype_BINARY_EVENT:
+    case sIOtype_BINARY_ACK:
+      break;
+  }
+}
+
+// ============== RECORDER TASK ==============
+void recorderTask(void* pvParameters) {
+  const int blocksPerClip = (SAMPLE_RATE * RECORD_SECONDS) / MIC_BLOCK_SAMPLES;
+  size_t bytesRead = 0;
+
+  for (;;) {
+    if (xSemaphoreTake(sdMutex, portMAX_DELAY) != pdTRUE) { vTaskDelay(1000/portTICK_PERIOD_MS); continue; }
+    if (!SD.exists("/audio")) SD.mkdir("/audio");
+    String fname = String("/audio/rec_") + String(millis()) + ".wav";
+    File wf = SD.open(fname, FILE_WRITE);
+    if (!wf) {
+      LOG("REC","SD open failed");
+      xSemaphoreGive(sdMutex);
+      vTaskDelay(1000/portTICK_PERIOD_MS);
+      continue;
+    }
+
+    uint8_t z[44]; memset(z,0,44); wf.write(z,44);
+    uint32_t dataBytes = 0;
+    LOG("REC","Recording clip " + fname);
+
+    for (int b = 0; b < blocksPerClip; ++b) {
+      i2s_read(I2S_NUM_0, micInBuf, MIC_BLOCK_SAMPLES * sizeof(int32_t), &bytesRead, portMAX_DELAY);
+      if (bytesRead == 0) { b--; vTaskDelay(5/portTICK_PERIOD_MS); continue; }
+      int samples = bytesRead / 4;
+      for (int i = 0; i < samples; ++i) {
+        int32_t s32 = micInBuf[i] >> 8;
+        int16_t s16 = (int16_t)(s32 >> 8);
+        mic16Buf[i] = s16;
+      }
+      wf.write((uint8_t*)mic16Buf, samples * sizeof(int16_t));
+      dataBytes += samples * sizeof(int16_t);
+      vTaskDelay(1 / portTICK_PERIOD_MS);
+    }
+
+    writeWavHeader(wf, dataBytes);
+    wf.close();
+    xSemaphoreGive(sdMutex);
+    LOG("REC","Saved clip bytes=" + String(dataBytes));
+
+    connectWiFi();
+    if (WiFi.status() == WL_CONNECTED && socketConnected) {
+      uploadAudioViaSocket(fname);
+      logSensorDataViaSocket(analogRead(LDR_PIN), analogRead(SOIL_PIN));
+      if (SD.exists(fname)) SD.remove(fname);
+    } else {
+      LOG("REC","Not connected - keeping clip on SD");
+    }
+
+    vTaskDelay(200 / portTICK_PERIOD_MS);
+  }
+}
+
+// ============== SETUP ==============
+void setup() {
+  Serial.begin(115200);
+  delay(300);
+  LOG("SYSTEM","Booting...");
+
+  sdMutex = xSemaphoreCreateMutex();
+
+  if (!SD.begin(SD_CS)) LOG("SD","init failed");
+  else LOG("SD","SD initialized");
+
+  if (!SD.exists("/audio")) SD.mkdir("/audio");
+
+  connectWiFi();
+  initI2SMic();
+  initI2SSpeaker();
+
+  // Setup Socket.IO with proper SSL
+  socketIO.begin(SOCKETIO_SERVER, SOCKETIO_PORT, "/socket.io/?EIO=4&transport=websocket");
+  socketIO.onEvent(socketIOEvent);
+  LOG("SYSTEM","Socket.IO initializing...");
+
+  xTaskCreatePinnedToCore(recorderTask, "recTask", 16*1024, NULL, 5, &recorderTaskHandle, 1);
+  LOG("SYSTEM","Recorder started (continuous).");
+}
+
+// ============== LOOP ==============
+void loop() {
+  socketIO.loop();
+  
+  if (WiFi.status() != WL_CONNECTED) {
+    connectWiFi();
+  }
+  
+  // Check Socket.IO connection status
+  socketConnected = socketIO.isConnected();
+  
+  delay(1000);
+}

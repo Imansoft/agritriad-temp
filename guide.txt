@@ -1,115 +1,287 @@
-Generate a complete Flask backend with the following specifications. 
-Do this in the file named `app.py`.
+========================================
+AGRITRIAD FLASK BACKEND - API DOCUMENTATION
+========================================
+
+This document describes the Flask backend API endpoints for the AgriTriad hardware+software project.
+The backend handles audio file transfers and sensor data logging from an ESP32 microcontroller.
 
 ========================================
 PROJECT GOAL
 ========================================
-Create three API endpoints for hardware testing:
-
-1. /api/audio      → The hardware POSTs an audio file here.
-2. /api/audio2     → The hardware GETs an audio response here.
-3. /api/database   → The hardware POSTs sensor readings here as JSON.
-
-These endpoints are temporary and meant for testing audio transmission and sensor updates.
+Create a Flask backend with REST API endpoints for hardware testing:
+- Accept audio files from hardware (POST)
+- Send audio files to hardware (GET)
+- Log sensor readings to a database file (POST)
+- Retrieve sensor readings from the database (GET)
 
 ========================================
-DETAILED REQUIREMENTS
+SERVER SETUP
+========================================
+- Framework: Flask with CORS enabled
+- Port: 5000 (local) or Render deployment at https://agritriad-temp.onrender.com
+- Directories (auto-created):
+  * audio/received/     → Stores uploaded audio from hardware
+  * audio/sent/         → Stores audio files to send to hardware
+  * sensor_logs.txt     → Appended JSON log of sensor readings
+
+========================================
+API ENDPOINTS
 ========================================
 
-### 1. /api/audio  (POST)
-- Accept multipart/form-data.
-- Field name for the audio file: "audio".
-- Save uploaded audio files to a folder named "audio/received".
-- Return JSON: { "status": "received", "filename": "<saved name>" }
+### 1. GET /
+Health check endpoint to verify server is running.
 
-### 2. /api/audio2  (GET)
-- This endpoint returns a test audio file back to the hardware.
-- Always return a file named "English.wav" stored in "audio/sent".
-- Return this file as an audio/wav response.
+REQUEST:
+  GET http://127.0.0.1:5000/
 
-### 3. /api/database (POST)
-- Receive JSON with sensor readings.
-- Example:
+RESPONSE (200 OK):
+  {
+    "status": "ok"
+  }
+
+EXAMPLE (Python):
+  import requests
+  response = requests.get("http://127.0.0.1:5000/")
+  print(response.json())
+
+EXAMPLE (cURL):
+  curl http://127.0.0.1:5000/
+
+---
+
+### 2. POST /api/audio
+Upload an audio file from hardware to the server.
+
+REQUEST:
+  POST http://127.0.0.1:5000/api/audio
+  Content-Type: multipart/form-data
+  
+  Form field name: "audio"
+  Form value: <binary audio file>
+
+RESPONSE (200 OK):
+  {
+    "status": "received",
+    "filename": "recording_001.wav"
+  }
+
+RESPONSE (400 Bad Request):
+  {
+    "error": "No audio file part in the request"
+  }
+
+EXAMPLE (Python):
+  import requests
+  
+  with open("audio/send/English.wav", "rb") as f:
+    files = {'audio': f}
+    response = requests.post("http://127.0.0.1:5000/api/audio", files=files)
+  print(response.json())
+
+EXAMPLE (cURL):
+  curl -X POST -F "audio=@English.wav" http://127.0.0.1:5000/api/audio
+
+---
+
+### 3. GET /api/audio2
+Request an audio file from the server. Always returns "English.wav" from audio/sent/ folder.
+
+REQUEST:
+  GET http://127.0.0.1:5000/api/audio2
+
+RESPONSE (200 OK):
+  [binary WAV audio file content]
+
+RESPONSE (404 Not Found):
+  {
+    "error": "File English.wav not found in audio/send"
+  }
+
+EXAMPLE (Python):
+  import requests
+  
+  response = requests.get("http://127.0.0.1:5000/api/audio2")
+  if response.status_code == 200:
+    with open("received_audio.wav", "wb") as f:
+      f.write(response.content)
+    print("Audio saved to received_audio.wav")
+
+EXAMPLE (cURL):
+  curl http://127.0.0.1:5000/api/audio2 -o received_audio.wav
+
+---
+
+### 4. POST /api/database
+Log sensor readings (light value, moisture value, etc.) to sensor_logs.txt.
+
+REQUEST:
+  POST http://127.0.0.1:5000/api/database
+  Content-Type: application/json
+  
   {
     "device_id": "AGRO-001",
-    "timestamp": "2025-12-01T18:25:43",
+    "timestamp": "2025-12-12T13:11:26",
     "light_value": 320,
     "moisture_value": 690
   }
-- Append this JSON to a simple text file named `sensor_logs.txt` (newline separated).
-- Return JSON: { "status": "saved" }
+
+RESPONSE (200 OK):
+  {
+    "status": "saved"
+  }
+
+RESPONSE (400 Bad Request):
+  {
+    "error": "Missing required sensor fields"
+  }
+
+REQUIRED FIELDS:
+  - device_id (string): Unique identifier for the device
+  - timestamp (string): ISO 8601 format (YYYY-MM-DDTHH:MM:SS)
+  - light_value (integer): LDR sensor reading (0-4095)
+  - moisture_value (integer): Soil moisture sensor reading (0-4095)
+
+EXAMPLE (Python):
+  import requests
+  from datetime import datetime
+  
+  data = {
+    "device_id": "AGRO-001",
+    "timestamp": datetime.now().replace(microsecond=0).isoformat(),
+    "light_value": 320,
+    "moisture_value": 690
+  }
+  response = requests.post("http://127.0.0.1:5000/api/database", json=data)
+  print(response.json())
+
+EXAMPLE (cURL):
+  curl -X POST http://127.0.0.1:5000/api/database \
+    -H "Content-Type: application/json" \
+    -d '{"device_id":"AGRO-001","timestamp":"2025-12-12T13:11:26","light_value":320,"moisture_value":690}'
+
+---
+
+### 5. GET /api/database2
+Retrieve recent sensor entries from sensor_logs.txt.
+
+REQUEST:
+  GET http://127.0.0.1:5000/api/database2?count=1
+
+QUERY PARAMETERS:
+  - count (integer, default=1): Number of most recent entries to retrieve
+
+RESPONSE (200 OK):
+  {
+    "entries_returned": 1,
+    "data": [
+      {
+        "device_id": "AGRO-001",
+        "timestamp": "2025-12-12T13:11:26",
+        "light_value": 320,
+        "moisture_value": 690
+      }
+    ]
+  }
+
+RESPONSE (200 OK, more than available):
+  {
+    "entries_returned": 2,
+    "data": [
+      {
+        "device_id": "AGRO-001",
+        "timestamp": "2025-12-01T18:25:43",
+        "light_value": 320,
+        "moisture_value": 690
+      },
+      {
+        "device_id": "AGRO-001",
+        "timestamp": "2025-12-02T18:25:43",
+        "light_value": 310,
+        "moisture_value": 590
+      }
+    ],
+    "message": "max data in DB is 2"
+  }
+
+RESPONSE (404 Not Found):
+  {
+    "error": "No sensor data available"
+  }
+
+EXAMPLE (Python):
+  import requests
+  
+  response = requests.get("http://127.0.0.1:5000/api/database2", params={"count": 5})
+  print(response.json())
+
+EXAMPLE (cURL):
+  curl "http://127.0.0.1:5000/api/database2?count=5"
+
+---
 
 ========================================
-SERVER REQUIREMENTS
+TESTING WITH POSTMAN
 ========================================
-- Use Flask.
-- Use `flask_cors` to allow CORS.
-- Create folders automatically if they don't exist:
-  audio/
-     received/
-     sent/
-- Add basic error handling for missing files or invalid JSON.
-- Add a `/` health check route returning: { "status": "ok" }
+
+1. Upload Audio File:
+   - Method: POST
+   - URL: http://127.0.0.1:5000/api/audio
+   - Body → form-data:
+     * Key: "audio" (type: File)
+     * Value: Select an audio file from your computer
+   - Send
+
+2. Download Audio File:
+   - Method: GET
+   - URL: http://127.0.0.1:5000/api/audio2
+   - Send → Response will show the WAV file (use Save Response to save it)
+
+3. Log Sensor Data:
+   - Method: POST
+   - URL: http://127.0.0.1:5000/api/database
+   - Headers → Content-Type: application/json
+   - Body → raw (JSON):
+     {
+       "device_id": "AGRO-001",
+       "timestamp": "2025-12-12T13:11:26",
+       "light_value": 320,
+       "moisture_value": 690
+     }
+   - Send
+
+4. Fetch Sensor Data:
+   - Method: GET
+   - URL: http://127.0.0.1:5000/api/database2?count=1
+   - Send
 
 ========================================
-EXTRA NOTES
+DEPLOYMENT
 ========================================
-- No authentication required.
-- Keep the code simple and clean.
-- Include comments explaining each route.
-- Include `if __name__ == "__main__":` block to run server on port 5000.
+Currently deployed on Render:
+  Base URL: https://agritriad-temp.onrender.com
+  
+Replace localhost URLs with:
+  https://agritriad-temp.onrender.com/api/audio
+  https://agritriad-temp.onrender.com/api/audio2
+  https://agritriad-temp.onrender.com/api/database
+  https://agritriad-temp.onrender.com/api/database2
 
-Generate the full working code.
+Note: CORS is enabled, so requests from any origin are allowed.
 
+========================================
+ERROR HANDLING
+========================================
+All endpoints return appropriate HTTP status codes:
+  - 200 OK: Request successful
+  - 400 Bad Request: Missing required fields or invalid parameters
+  - 404 Not Found: File or resource not found
+  - 500 Internal Server Error: Server-side error (check logs)
 
-{
-  'data': [
-    {
-      'device_id': 'AGRO-001', 
-      'light_value': 310, 
-      'moisture_value': 590, 
-      'timestamp': '2025-12-02T18:25:43'
-    }
-  ], 
-  'entries_returned': 1
-}
-
-
-
-{
-  'data': [
-    {
-      'device_id': 'AGRO-001', 
-      'light_value': 320, 
-      'moisture_value': 690, 
-      'timestamp': '2025-12-01T18:25:43'
-    }, 
-    {
-      'device_id': 'AGRO-001', 
-      'light_value': 310, 
-      'moisture_value': 590, 
-      'timestamp': '2025-12-02T18:25:43'
-    }
-  ], 
-  'entries_returned': 2
-}
-
-
-{
-  'data': [
-    {
-      'device_id': 'AGRO-001', 
-      'light_value': 320, 
-      'moisture_value': 690, 
-      'timestamp': '2025-12-01T18:25:43'
-    }, 
-    {
-      'device_id': 'AGRO-001', 
-      'light_value': 310, 
-      'moisture_value': 590, 
-      'timestamp': '2025-12-02T18:25:43'
-    }
-  ], 
-  'entries_returned': 2, 
-  'message': 'max data in DB is 2'
-}
+========================================
+NOTES FOR HARDWARE (ESP32)
+========================================
+- Use HTTPClient library for ESP32
+- Always set Content-Type headers correctly
+- Use the same JSON format for sensor data
+- Encode binary audio as base64 if needed for JSON transmission
+- Implement retry logic for network failures
